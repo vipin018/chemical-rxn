@@ -1,5 +1,8 @@
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import * as THREE from 'three';
+import { GUI } from 'dat.gui';
 let scene, camera, renderer, gui;
-let sphere1, sphere2;
+let sphere1, sphere2, reactionSphere;
 let particleSystem, particleGeometry, particleMaterial;
 let lineSystem, lineGeometry, lineMaterial;
 let reactionMaterial;
@@ -12,8 +15,8 @@ let particlesStartTime = 0;
 let hasCollided = false;
 
 // Particle system properties
-const particleCount = 300;
-const lineCount = 50;
+const particleCount = 600; // Increased for denser liquid-like effect
+const lineCount = 20; // Reduced for subtler glowing trails
 let particles = [];
 let lines = [];
 
@@ -27,11 +30,23 @@ const params = {
     glowIntensity: 2.0,
     animationSpeed: 1.0,
     collisionDistance: 2.2,
-    particleSpeed: 2.0,
-    particleSize: 0.05,
-    lineOpacity: 0.8,
-    particleLifetime: 8.0,
-    explosionForce: 5.0,
+    particleSpeed: 1.2, // Slower for liquid-like flow
+    particleSize: 0.12, // Larger for glowing liquid effect
+    lineOpacity: 0.3, // Subtle glowing trails
+    particleLifetime: 12.0, // Longer for sustained reaction
+    explosionForce: 2.5, // Gentler for liquid-like motion
+    sphereRadius: 3.0,
+    reactionSphereColor: '#88ff88',
+    emissiveColor: '#00ff00',
+    emissiveIntensity: 0.5,
+    metalness: 0.0,
+    roughness: 0.05,
+    opacity: 0.4,
+    transmission: 0.95,
+    reflectivity: 0.9,
+    clearcoat: 1.0,
+    clearcoatRoughness: 0.05,
+    particleColor: '#00ff00',
     resetAnimation: function() {
         resetAnimation();
     }
@@ -56,7 +71,15 @@ async function init() {
     renderer.setClearColor(0x000011);
     document.body.appendChild(renderer.domElement);
 
-    // Create sphere material
+    // Load HDRI for environment
+    const loader = new THREE.RGBELoader();
+    loader.load('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/pretoria_gardens_1k.hdr', function(texture) {
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        scene.environment = texture;
+        // scene.background = texture; // Uncomment to set HDRI as background
+    });
+
+    // Create sphere material for original spheres
     reactionMaterial = new THREE.ShaderMaterial({
         uniforms: {
             u_time: { value: 0.0 },
@@ -73,22 +96,43 @@ async function init() {
         side: THREE.DoubleSide
     });
 
+    // Create glass-like material with neon green glow
+    const glassMaterial = new THREE.MeshPhysicalMaterial({
+        color: new THREE.Color(params.reactionSphereColor),
+        emissive: new THREE.Color(params.emissiveColor),
+        emissiveIntensity: params.emissiveIntensity,
+        metalness: params.metalness,
+        roughness: params.roughness,
+        opacity: params.opacity,
+        transparent: true,
+        transmission: params.transmission,
+        reflectivity: params.reflectivity,
+        clearcoat: params.clearcoat,
+        clearcoatRoughness: params.clearcoatRoughness,
+        side: THREE.DoubleSide
+    });
+
     createSpheres();
+    createReactionSphere(glassMaterial);
     createParticleSystem();
     createLineSystem();
     
     camera.position.set(0, 0, 12);
     camera.lookAt(0, 0, 0);
 
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.1);
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.4);
     scene.add(ambientLight);
+
+    const pointLight = new THREE.PointLight(0x00ff00, 1.0, 50);
+    pointLight.position.set(0, 5, 5);
+    scene.add(pointLight);
 
     setupGUI();
     animate();
 }
 
 function createSpheres() {
-    const sphereGeometry = new THREE.SphereGeometry(2, 64, 32);
+    const sphereGeometry = new THREE.SphereGeometry(1, 64, 32);
     
     sphere1 = new THREE.Mesh(sphereGeometry, reactionMaterial.clone());
     sphere1.position.set(-6, 0, 0);
@@ -99,30 +143,29 @@ function createSpheres() {
     scene.add(sphere2);
 }
 
+function createReactionSphere(material) {
+    const sphereGeometry = new THREE.SphereGeometry(params.sphereRadius, 64, 32);
+    reactionSphere = new THREE.Mesh(sphereGeometry, material);
+    reactionSphere.visible = false;
+    scene.add(reactionSphere);
+}
+
 function createParticleSystem() {
     particleGeometry = new THREE.BufferGeometry();
     
-    // Initialize particle positions and properties
     const positions = new Float32Array(particleCount * 3);
     const colors = new Float32Array(particleCount * 3);
     const sizes = new Float32Array(particleCount);
     
+    updateParticleColors(); // Initial color setup
+    
     for (let i = 0; i < particleCount; i++) {
-        // Start particles at collision center
         positions[i * 3] = 0;
         positions[i * 3 + 1] = 0;
         positions[i * 3 + 2] = 0;
         
-        // Random colors
-        const hue = Math.random();
-        const color = new THREE.Color().setHSL(hue, 0.8, 0.7);
-        colors[i * 3] = color.r;
-        colors[i * 3 + 1] = color.g;
-        colors[i * 3 + 2] = color.b;
-        
         sizes[i] = Math.random() * params.particleSize + params.particleSize * 0.5;
         
-        // Create particle data
         particles.push({
             velocity: new THREE.Vector3(
                 (Math.random() - 0.5) * params.explosionForce,
@@ -160,7 +203,7 @@ function createParticleSystem() {
             void main() {
                 float distanceToCenter = distance(gl_PointCoord, vec2(0.5));
                 float alpha = 1.0 - smoothstep(0.0, 0.5, distanceToCenter);
-                gl_FragColor = vec4(vColor, alpha);
+                gl_FragColor = vec4(vColor, alpha * 0.7);
             }
         `,
         transparent: true,
@@ -173,33 +216,45 @@ function createParticleSystem() {
     scene.add(particleSystem);
 }
 
+function updateParticleColors() {
+    const colors = particleGeometry.attributes.color.array;
+    for (let i = 0; i < particleCount; i++) {
+        const hue = 0.33 + (Math.random() - 0.5) * 0.05;
+        const color = new THREE.Color(params.particleColor).setHSL(hue, 1.0, 0.5 + Math.random() * 0.2);
+        const idx = i * 3;
+        colors[idx] = color.r;
+        colors[idx + 1] = color.g;
+        colors[idx + 2] = color.b;
+    }
+    particleGeometry.attributes.color.needsUpdate = true;
+}
+
 function createLineSystem() {
     lineGeometry = new THREE.BufferGeometry();
     
-    const linePositions = new Float32Array(lineCount * 6); // 2 points per line
-    const lineColors = new Float32Array(lineCount * 6); // 2 colors per line
+    const linePositions = new Float32Array(lineCount * 6);
+    const lineColors = new Float32Array(lineCount * 6);
     
     for (let i = 0; i < lineCount; i++) {
-        // Initialize lines at center
         const idx = i * 6;
         linePositions[idx] = 0;     linePositions[idx + 1] = 0;     linePositions[idx + 2] = 0;
         linePositions[idx + 3] = 0; linePositions[idx + 4] = 0;     linePositions[idx + 5] = 0;
         
-        // Random line colors
-        const hue = Math.random();
-        const color = new THREE.Color().setHSL(hue, 0.9, 0.8);
+        const hue = 0.33 + (Math.random() - 0.5) * 0.05;
+        const color = new THREE.Color().setHSL(hue, 1.0, 0.6);
         
         lineColors[idx] = color.r;     lineColors[idx + 1] = color.g;     lineColors[idx + 2] = color.b;
         lineColors[idx + 3] = color.r; lineColors[idx + 4] = color.g;     lineColors[idx + 5] = color.b;
         
-        // Create line data
+        const endPos = new THREE.Vector3(
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 2
+        ).normalize().multiplyScalar(params.sphereRadius * (0.5 + Math.random() * 0.5));
+        
         lines.push({
             startPos: new THREE.Vector3(0, 0, 0),
-            endPos: new THREE.Vector3(
-                (Math.random() - 0.5) * 8,
-                (Math.random() - 0.5) * 8,
-                (Math.random() - 0.5) * 8
-            ),
+            endPos: endPos,
             life: 0,
             maxLife: Math.random() * 4 + 3,
             color: color
@@ -233,13 +288,56 @@ function setupGUI() {
     gui.add(params, 'animationSpeed', 0.1, 3.0).name('Animation Speed');
     gui.add(params, 'collisionDistance', 1.5, 4.0).name('Collision Distance');
     gui.add(params, 'particleSpeed', 1.0, 5.0).name('Particle Speed');
-    gui.add(params, 'particleSize', 0.02, 0.2).name('Particle Size');
+    gui.add(params, 'particleSize', 0.02, 0.2).name('Particle Size').onChange(updateParticleSizes);
     gui.add(params, 'lineOpacity', 0.1, 1.0).name('Line Opacity').onChange(() => {
         lineMaterial.opacity = params.lineOpacity;
     });
     gui.add(params, 'explosionForce', 2.0, 10.0).name('Explosion Force');
     gui.add(params, 'particleLifetime', 3.0, 12.0).name('Particle Lifetime');
+
+    // Add controls for reaction sphere material
+    const sphereFolder = gui.addFolder('Reaction Sphere Material');
+    sphereFolder.add(params, 'sphereRadius', 1.0, 5.0).name('Sphere Radius').onChange(updateMaterial);
+    sphereFolder.addColor(params, 'reactionSphereColor').name('Color').onChange(updateMaterial);
+    sphereFolder.addColor(params, 'emissiveColor').name('Emissive Color').onChange(updateMaterial);
+    sphereFolder.add(params, 'emissiveIntensity', 0.0, 1.0).name('Emissive Intensity').onChange(updateMaterial);
+    sphereFolder.add(params, 'metalness', 0.0, 1.0).name('Metalness').onChange(updateMaterial);
+    sphereFolder.add(params, 'roughness', 0.0, 1.0).name('Roughness').onChange(updateMaterial);
+    sphereFolder.add(params, 'opacity', 0.0, 1.0).name('Opacity').onChange(updateMaterial);
+    sphereFolder.add(params, 'transmission', 0.0, 1.0).name('Transmission').onChange(updateMaterial);
+    sphereFolder.add(params, 'reflectivity', 0.0, 1.0).name('Reflectivity').onChange(updateMaterial);
+    sphereFolder.add(params, 'clearcoat', 0.0, 1.0).name('Clearcoat').onChange(updateMaterial);
+    sphereFolder.add(params, 'clearcoatRoughness', 0.0, 1.0).name('Clearcoat Roughness').onChange(updateMaterial);
+
+    // Add control for liquid glow (particle color)
+    const liquidFolder = gui.addFolder('Liquid Glow');
+    liquidFolder.addColor(params, 'particleColor').name('Particle Color').onChange(updateParticleColors);
+
     gui.add(params, 'resetAnimation').name('Reset Animation');
+}
+
+function updateParticleSizes() {
+    const sizes = particleGeometry.attributes.size.array;
+    for (let i = 0; i < particleCount; i++) {
+        sizes[i] = Math.random() * params.particleSize + params.particleSize * 0.5;
+        particles[i].originalSize = sizes[i];
+    }
+    particleGeometry.attributes.size.needsUpdate = true;
+}
+
+function updateMaterial() {
+    reactionSphere.geometry = new THREE.SphereGeometry(params.sphereRadius, 64, 32);
+    reactionSphere.material.color.set(params.reactionSphereColor);
+    reactionSphere.material.emissive.set(params.emissiveColor);
+    reactionSphere.material.emissiveIntensity = params.emissiveIntensity;
+    reactionSphere.material.metalness = params.metalness;
+    reactionSphere.material.roughness = params.roughness;
+    reactionSphere.material.opacity = params.opacity;
+    reactionSphere.material.transmission = params.transmission;
+    reactionSphere.material.reflectivity = params.reflectivity;
+    reactionSphere.material.clearcoat = params.clearcoat;
+    reactionSphere.material.clearcoatRoughness = params.clearcoatRoughness;
+    reactionSphere.material.needsUpdate = true;
 }
 
 function updateUniforms() {
@@ -262,6 +360,7 @@ function resetAnimation() {
     sphere2.position.set(6, 0, 0);
     sphere1.visible = true;
     sphere2.visible = true;
+    reactionSphere.visible = false;
     particleSystem.visible = false;
     lineSystem.visible = false;
     
@@ -275,11 +374,21 @@ function resetAnimation() {
     // Reset particles
     for (let i = 0; i < particles.length; i++) {
         particles[i].life = 0;
+        particles[i].velocity.set(
+            (Math.random() - 0.5) * params.explosionForce,
+            (Math.random() - 0.5) * params.explosionForce,
+            (Math.random() - 0.5) * params.explosionForce
+        );
     }
     
     // Reset lines
     for (let i = 0; i < lines.length; i++) {
         lines[i].life = 0;
+        lines[i].endPos = new THREE.Vector3(
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 2,
+            (Math.random() - 0.5) * 2
+        ).normalize().multiplyScalar(params.sphereRadius * (0.5 + Math.random() * 0.5));
     }
 }
 
@@ -299,16 +408,36 @@ function updateParticles(deltaTime) {
             positions[idx + 1] += particle.velocity.y * deltaTime * params.particleSpeed;
             positions[idx + 2] += particle.velocity.z * deltaTime * params.particleSpeed;
             
-            // Apply gravity and damping
-            particle.velocity.y -= 2.0 * deltaTime;
-            particle.velocity.multiplyScalar(0.98);
+            // Add turbulent motion for liquid-like effect
+            const time = particle.life;
+            particle.velocity.x += Math.sin(time * 2.5 + i) * 0.15 * deltaTime;
+            particle.velocity.y += Math.cos(time * 2.0 + i) * 0.15 * deltaTime;
+            particle.velocity.z += Math.sin(time * 2.2 + i) * 0.15 * deltaTime;
             
-            // Update size and color based on life
+            // Apply damping
+            particle.velocity.multiplyScalar(0.93);
+            
+            // Constrain particles within spherical boundary
+            const pos = new THREE.Vector3(positions[idx], positions[idx + 1], positions[idx + 2]);
+            const distance = pos.length();
+            if (distance > params.sphereRadius * 0.95) {
+                pos.normalize().multiplyScalar(params.sphereRadius * 0.95);
+                positions[idx] = pos.x;
+                positions[idx + 1] = pos.y;
+                positions[idx + 2] = pos.z;
+                
+                const normal = pos.clone().normalize();
+                const velocity = particle.velocity;
+                const dot = velocity.dot(normal);
+                particle.velocity.sub(normal.multiplyScalar(2 * dot));
+                particle.velocity.multiplyScalar(0.7);
+            }
+            
+            // Update size and color
             const lifeRatio = particle.life / particle.maxLife;
-            sizes[i] = particle.originalSize * (1.0 - lifeRatio * 0.8);
+            sizes[i] = particle.originalSize * (1.0 - lifeRatio * 0.5);
             
-            // Fade color
-            const colorMultiplier = 1.0 - lifeRatio * 0.7;
+            const colorMultiplier = 1.0 - lifeRatio * 0.4;
             colors[idx] *= colorMultiplier;
             colors[idx + 1] *= colorMultiplier;
             colors[idx + 2] *= colorMultiplier;
@@ -332,14 +461,18 @@ function updateLines(deltaTime) {
             const lifeRatio = line.life / line.maxLife;
             const idx = i * 6;
             
-            // Animate line growth
+            // Animate line growth within spherical boundary
             const currentEnd = line.startPos.clone().lerp(line.endPos, lifeRatio);
+            const distance = currentEnd.length();
+            if (distance > params.sphereRadius * 0.95) {
+                currentEnd.normalize().multiplyScalar(params.sphereRadius * 0.95);
+            }
             positions[idx + 3] = currentEnd.x;
             positions[idx + 4] = currentEnd.y;
             positions[idx + 5] = currentEnd.z;
             
             // Fade color
-            const alpha = 1.0 - lifeRatio * 0.8;
+            const alpha = 1.0 - lifeRatio * 0.7;
             colors[idx] = line.color.r * alpha;
             colors[idx + 1] = line.color.g * alpha;
             colors[idx + 2] = line.color.b * alpha;
@@ -389,17 +522,19 @@ function animate() {
             sphere1.material.uniforms.u_morphFactor.value = collisionIntensity;
             sphere2.material.uniforms.u_morphFactor.value = collisionIntensity;
             
-            // Start particle system after 1.5 seconds
+            // Start particle system and reaction sphere after 1.5 seconds
             if (collisionDuration > 1.5) {
                 animationState = 'particles';
                 particlesStartTime = elapsedTime;
                 sphere1.visible = false;
                 sphere2.visible = false;
+                reactionSphere.visible = true;
                 particleSystem.visible = true;
                 lineSystem.visible = true;
                 
-                // Position particle system at collision center
+                // Position systems at collision center
                 const collisionCenter = sphere1.position.clone().add(sphere2.position).multiplyScalar(0.5);
+                reactionSphere.position.copy(collisionCenter);
                 particleSystem.position.copy(collisionCenter);
                 lineSystem.position.copy(collisionCenter);
             }
